@@ -1,5 +1,6 @@
 #define pinUD 15    // A0 is pin 15
 #define pinLR 14    // A1 is pin 14
+#define servoShield_addr 0x40    // Adafruit servo shield's default address is 0x40
 
 #include <Wire.h>
 #include <Servo.h>
@@ -13,12 +14,15 @@ void setup() {
   Serial.begin(9600);
   offsetUD = analogRead(pinUD);
   offsetLR = analogRead(pinLR);
-  Serial.println("Joystick ready.");
+  Serial.println("Joystick ready...");
   
   servoUD.attach(9);
   servoUD.writeMicroseconds(1000);
   delay(2000);
-  Serial.println("Up/Down Servo ready.");
+  Serial.println("Up/Down Servo ready...");
+  
+  Wire.begin();
+  
 }
 
 void loop() {
