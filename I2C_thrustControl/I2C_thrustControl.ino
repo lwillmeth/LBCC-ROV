@@ -22,7 +22,6 @@ void setup() {
   Serial.println("Up/Down Servo ready...");
   
   Wire.begin();
-  
 }
 
 void loop() {
