@@ -1,14 +1,14 @@
 #include <SPI.h>
 #include <Ethernet.h>
 #include <EthernetUdp.h>
-//#include <Servo.h>
+#include <Servo.h>
 
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>
 
 #define DEBUGGING true    // Enables debugging output
 #define ECHO_ON true      // Enables echoing commands back to controller
-#define STOP 500      // Sets the stop position for the ESC
+#define STOP 1000      // Sets the stop position for the ESC
 #define TIMEOUT 3000   // Sets timeout in case communication to surface is lost
 
 #define PROP_MAX 500    // Largest acceptable control value
@@ -18,18 +18,17 @@
 #define STOP 1000      // The prop ESC's are set to stop at 1000 us
 
 #define UDP_BUFFER_SIZE 36 // 3 bytes * 12 servos = 36 byte buffer
-
+// slipperyrobot
 /* ============================================================================
   Settings
 ============================================================================ */
-
 // Ethernet variables
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
 IPAddress ip		(10,1,1,1);
 IPAddress gateway	(10,0,0,1);
 IPAddress subnet	(255,0,0,0);
 EthernetUDP Udp;
-uint16_t localPort = 21050;
+uint16_t localPort = 21015;
 uint32_t lastCom;
 char udp_buffer[UDP_BUFFER_SIZE];
 
@@ -46,51 +45,60 @@ int16_t servoRange[][3] = {
   {0, 180, 90},
   {0, 180, 90}
 };
+int motor_rpm = 0;
+
+// An array of servo objects, one for each prop and servo.
+Servo motors[CTRL_SIZE];
 
 /* ============================================================================
   Main
 ============================================================================ */
 
-void setup(){
+void setup (){
   Serial.begin(9600);
-  Serial.println(F("Waiting for ethernet..."));
+
   // Begin Ethernet
   if (Ethernet.begin(mac) == 0) {
     // DHCP will timeout after 1 minute.
     Ethernet.begin(mac, ip, gateway, subnet);
   }
   Udp.begin(localPort);
-  if(DEBUGGING){
-    Serial.print(F("IP: "));
-    Serial.print(Ethernet.localIP());
-    Serial.print(F(":"));
-    Serial.println(localPort);
-  }
-  
+  Serial.print(F("IP: "));
+  Serial.print(Ethernet.localIP());
+  Serial.print(F(":"));
+  Serial.println(localPort);
+
   // Begin I2C
   pwm.begin();
-  pwm.setPWMFreq(1540);  // Min PWM freq is 40, and this is the max.
-//  uint8_t twbrbackup = TWBR;
-//  TWBR = 12;
+  pwm.setPWMFreq(1500);  // This is the maximum PWM frequency
+  uint8_t twbrbackup = TWBR;
+  TWBR = 12;
+  
+  // Designate a pin for each prop, allowing us to control them
+  motors[0].attach(2);
+  motors[1].attach(3);
+  motors[2].attach(4);
+  motors[3].attach(5);
+  // Add rest of motors as we assign pins.
 
-  // Arm all motors by sending a STOP position.
-  for(int i=0; i<8; i++){
-    control[i] = STOP;
-  }
-  runMotors();
+  // Prop motors must be 'armed' by sending a "stop" position
+  motors[0].writeMicroseconds(STOP);
+  motors[1].writeMicroseconds(STOP);
+  motors[2].writeMicroseconds(STOP);
+  motors[3].writeMicroseconds(STOP);
 }
 
 void loop (){
   handleIncomingData();
-  if(ECHO_ON){
-    broadcast(TIMEOUT);
+  if(DEBUGGING){
+    broadcast(1000);
   }
   // Full stop if we lose connection to command station.
   if( micros() - lastCom < TIMEOUT){
-//    runMotors();
+    motor_rpm++;
+    runMotors();
   } else {
     stopMotors();
-    delay(500);
   }
 }
 
@@ -99,7 +107,8 @@ void loop (){
 ============================================================================ */
 
 void runMotors (){
-  for(int8_t i=0; i<CTRL_SIZE; i++){
+  // For now, only testing first 4 props.  Later, we can use i<CTRL_SIZE to run them all.
+  for(int8_t i=0; i<5; i++){
     /*
     More thought should go into this.
     We have an array of motors, most of which won't be moving.
@@ -111,7 +120,6 @@ void runMotors (){
     */
     if(control[i] != 0){
 //      motors[i].writeMicroseconds(control[i]);
-      pwm.setPWM(i, 0, control[i]);
     }
   }
 }
@@ -123,16 +131,17 @@ void stopMotors (){
     control[i] = STOP;
   }
   // Send error code in case anyone's listening.
-  sendUDP(30, 99);
+//  sendUDP(30, 99);
 }
 
 /* ============================================================================
   Networking
 ============================================================================ */
 
-void handleIncomingData(){
+void handleIncomingData (){
   // Read incoming ethernet data and interpret commands.
-  // Find size of incoming datagram packet.
+  // static char packetBuffer[UDP_TX_PACKET_MAX_SIZE];
+  // static char replyBuffer[] = "acknowledged";
   int packetSize = Udp.parsePacket();
   if (packetSize){
     // Read incoming packet into buffer.
@@ -144,46 +153,65 @@ void handleIncomingData(){
       Serial.print(ip_to_str(Udp.remoteIP()));
       Serial.print(F(", port "));
       Serial.println(Udp.remotePort());
+      Serial.print("Motor rpm: ");
+      Serial.print(motor_rpm);
       Serial.print(" ");
       Serial.println((String)udp_buffer);
     }
-    if(ECHO_ON){
-      // Send the buffer back for debugging
-      Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
-      Udp.write(udp_buffer);
-      Udp.endPacket();
-    }
+    sendUDP(1, 2, motor_rpm);
+    motor_rpm = 0;
+//    if(ECHO_ON){
+//      // Echo the buffer back
+//      Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
+//      Udp.write(udp_buffer);
+//      Udp.endPacket();
+//    }
 
-    // Read first byte in the buffer, interpret as command code:
-    switch(udp_buffer[0]){
+    // Read one byte from the buffer, interpret as command code:
+    switch( udp_buffer[0] ){
       case 1:
-        // SET [num_changes] [ind_1] [val_1] [ind_2] [val_2] etc
-        // Read next 3 bytes of buffer, interpret as SET [index] [value]
+        // SET command, update control value based on index
+        /* This process could be improved!
+        Read in a byte for the index, then smash two bytes together for value.
+        The problem is Udp.read() can only read one byte without using a buffer.
+        Either we read all incoming data on-the-fly, or store them all in advance.
+        I'd rather avoid the overhead of reading them in advance, but this seems messy.
+        */
+        //setValue( Udp.read(), (int)(Udp.read()<<Udp.read()) );
+        
+        // NEW METHOD (needs testing)
+        // Number of changes determined by size of packet, adjusted for overhead
+        // Read next byte of buffer, interpret as SET [index]
         for(int i=0; i<(packetSize-8); i+=3){
           // Read next 3 bytes of buffer, interpret as SET [index] [value]
           // Bit shift and logical OR recombine bytes 2&3 into an int
           setValue( udp_buffer[i], (udp_buffer[i+1]<<8 | udp_buffer[i+2]) );
-          //Udp.write(index & value);  // Is a reply even necessary?
+          //Udp.write(index & value);  // Is an echo even necessary?
         }
         break;
       case 2:
-        // GET command returns a motor(s) current speed setting.
-        // GET [index1] [index2] [index3] etc.
+        // GET command, return current value based on index
+        //getValue( Udp.read() );
+        
+        // NEW METHOD using SET [index1] [index2] [index3] etc.
         for(int i=0; i<(packetSize-8); i++){
+          // Read next byte of buffer, interpret as GET [index1] [index2]
           getValue( udp_buffer[i]);
         }
         break;
       case 3:
         // RANGE command, returns min and max motor values
-        // RANGE [index1] [index2] [index3] etc.
+        //getRange( Udp.read() );
+                
+        // NEW METHOD using RANGE [index1] [index2] [index3] etc.
         for(int i=0; i<(packetSize-8); i++){
+          // Read next byte of buffer, interpret as RANGE [index1] [index2]
           getRange( udp_buffer[i]);
         }
         break;
       default:
         // Signals an 'invalid input' error.
-        if(DEBUGGING) Serial.println("Error: Invalid CMD");
-        if(ECHO_ON) sendUDP(0, 999);
+        sendUDP(0, 0);
     }
     // Update timer each time we receive control data
     lastCom = micros();
@@ -191,23 +219,24 @@ void handleIncomingData(){
 }
 
 void broadcast (int gap){
-//  static unsigned long last = -gap;
+  static unsigned long last = -gap;
   static const IPAddress BROADCAST_IP (255,255,255,255);
-//  static const int BROADCAST_PORT (localPort);
+  static const int BROADCAST_PORT (21025);
 
-  if(DEBUGGING){
-    Serial.println(F("Broadcast!"));
-    Serial.print(F("IP: "));
-    Serial.println(ip_to_str(BROADCAST_IP));
-    Serial.print(F("PORT: "));
-    Serial.println(localPort, DEC);
+  if (millis() - last > gap) {
+    last = millis();
+//    Serial.println(F("Broadcast!"));
+//    Serial.print(F("IP: "));
+//    Serial.println(ip_to_str(BROADCAST_IP));
+//    Serial.print(F("PORT: "));
+//    Serial.println(BROADCAST_PORT, DEC);
+
+    Udp.beginPacket(BROADCAST_IP, BROADCAST_PORT);
+    Udp.write(byte(1));
+    Udp.write(byte(2));
+    Udp.write(int(100));
+    Udp.endPacket();
   }
-  Udp.beginPacket(BROADCAST_IP, localPort);
-  Udp.write(byte(1));
-  Udp.write(byte(2));
-  Udp.write(int(100));
-  Udp.endPacket();
-  delay(500);
 }
 
 void setValue (int8_t index, int16_t value){
@@ -215,11 +244,7 @@ void setValue (int8_t index, int16_t value){
   // Check if value is within acceptable range, otherwise return an error.
   if(index >= 0 && index <= CTRL_SIZE && value <= PROP_MAX && value >= PROP_MIN){
     // -520 to 520, motors ignore small amounts over abs(500)
-    control[index] = value;
-    
-    // Should be able to write value once and let I2C store it.
-    pwm.setPWM(index, 0, control[value]);
-    
+    control[index] = value*4;
     // Send back confirmation of new value.. may disable later.
     //getValue(index);
   } else {

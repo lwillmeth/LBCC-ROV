@@ -1,8 +1,8 @@
 #include <Servo.h>
 
 #define pi 3.14159265358979323846  // close enough
-#define DEBUGGING 1
-#define STOP 1000
+#define DEBUGGING 1    // Enables debugging output
+#define STOP 1000      // Sets the stop position for the ESC
 
 // Control inputs from the joystick
 #define pin_MV_UD 15    // A0 is pin 15
@@ -24,19 +24,20 @@ Servo prop_3;
 int offset_MV_UD, offset_MV_LR;
 
 // Variables to store our intended direction
+// MOVE Joystick
 int MV_UD, MV_LR;
 double MV_resultant, MV_theta;
 int MV_A, MV_B;
 
 void setup() {
   Serial.begin(9600);
-  Serial.print("Preparing joystick...  ");
+  Serial.print(F("Preparing joystick...  "));
   // Offsets read in once at startup, be certain joystick is neutral.
   offset_MV_UD = analogRead(pin_MV_UD);
   offset_MV_LR = analogRead(pin_MV_LR);
-  Serial.println("Joystick ready.");
+  Serial.println(F("Joystick ready."));
 
-  Serial.print("Preparing props...  ");
+  Serial.print(F("Preparing props...  "));
   // Attach servo objects to each prop's pin, allowing us to control the prop.
   prop_0.attach(2);
   prop_1.attach(3);
@@ -49,10 +50,8 @@ void setup() {
   prop_1.writeMicroseconds(STOP);
   prop_2.writeMicroseconds(STOP);
   prop_3.writeMicroseconds(STOP);
-  Serial.println("Props armed and ready.");
+  Serial.println(F("Props armed and ready."));
   
-  //  servoUD.attach(9);
-  //  servoUD.writeMicroseconds(1000);
   delay(2000);
 }
 
@@ -65,7 +64,6 @@ void loop() {
   if (abs(MV_UD) > 5 || abs(MV_LR) > 5) {
     // find A,B components by rotating axis CW pi/4 rad
     MV_resultant = sqrt( pow(MV_UD,2)+pow(MV_LR,2) );
-//    Serial.println( sqrt( pow(MV_UD,2)+pow(MV_LR,2) ));
     MV_theta = atan2(MV_UD, MV_LR)-pi/4;
     
     // Find values for each set of motors, to reach target vector
@@ -74,17 +72,17 @@ void loop() {
     MV_B = MV_resultant*cos(MV_theta);
     
     if(DEBUGGING){
-      Serial.print("Joystick=(");
+      Serial.print(F("Joystick=("));
       Serial.print( MV_LR );
-      Serial.print(",");
+      Serial.print(F(","));
       Serial.print( MV_UD );
-      Serial.print(")   \tMV_resultant=");
+      Serial.print(F(")   \tMV_resultant="));
       Serial.print( MV_resultant );
-      Serial.print("\tMV_theta=");
+      Serial.print(F("\tMV_theta="));
       Serial.print( MV_theta );
-      Serial.print("\tMV_A=");
+      Serial.print(F("\tMV_A="));
       Serial.print( MV_A );
-      Serial.print(" \tMV_B=");
+      Serial.print(F(" \tMV_B="));
       Serial.println( MV_B );
     }
     // Move A motors (0 & 2)
