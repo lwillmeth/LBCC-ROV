@@ -15,7 +15,7 @@
 #define PROP_MIN -500
 
 #define CTRL_SIZE 12   // Number of devices we're controlling
-#define STOP 1000      // The prop ESC's are set to stop at 1000 us
+#define STOP 0      // The prop ESC's are set to stop at 1000 us
 
 #define UDP_BUFFER_SIZE 36 // 3 bytes * 12 servos = 36 byte buffer
 
@@ -59,6 +59,7 @@ void setup(){
     // DHCP will timeout after 1 minute.
     Ethernet.begin(mac, ip, gateway, subnet);
   }
+  Serial.println(Ethernet.localIP() );
   Udp.begin(localPort);
   if(DEBUGGING){
     Serial.print(F("IP: "));
@@ -70,25 +71,19 @@ void setup(){
   // Begin I2C
   pwm.begin();
   pwm.setPWMFreq(1540);  // Min PWM freq is 40, and this is the max.
-//  uint8_t twbrbackup = TWBR;
-//  TWBR = 12;
 
-  // Arm all motors by sending a STOP position.
-  for(int i=0; i<8; i++){
-    control[i] = STOP;
-  }
-  runMotors();
+  // Arm all motors by sending each of them a STOP position.
+  stopMotors();
 }
 
 void loop (){
+  // Listen for, and process incoming commands.
   handleIncomingData();
-  if(ECHO_ON){
-    broadcast(TIMEOUT);
-  }
   // Full stop if we lose connection to command station.
-  if( micros() - lastCom < TIMEOUT){
-//    runMotors();
-  } else {
+  if( millis() - lastCom > TIMEOUT){
+    // Send an error message to anyone listening.
+    broadcast(TIMEOUT);
+    // Stop all motors.
     stopMotors();
     delay(500);
   }
@@ -97,30 +92,10 @@ void loop (){
 /* ============================================================================
   Motor Control
 ============================================================================ */
-
-void runMotors (){
-  for(int8_t i=0; i<CTRL_SIZE; i++){
-    /*
-    More thought should go into this.
-    We have an array of motors, most of which won't be moving.
-    It would be wise to skip non-moving motors, without requiring they
-    have a control value of 0.  I.e. a servo which may or may not rest
-    at a 0 position.
-    One solution may be to use an array of booleans,
-    or even a bit from a double, to signal active motors?
-    */
-    if(control[i] != 0){
-//      motors[i].writeMicroseconds(control[i]);
-      pwm.setPWM(i, 0, control[i]);
-    }
-  }
-}
-
 void stopMotors (){
-  // Failsafe if communication with surface is lost.
-  // Set all motors and servos to default STOP positions.
-  for(int8_t i=0; i<CTRL_SIZE; i++){
-    control[i] = STOP;
+  // Sends a STOP position to each of the prop motors
+  for(int8_t i=0; i < 8; i++){
+    setValue(i, STOP);
   }
   // Send error code in case anyone's listening.
   sendUDP(30, 99);
@@ -157,12 +132,19 @@ void handleIncomingData(){
     // Read first byte in the buffer, interpret as command code:
     switch(udp_buffer[0]){
       case 1:
+        Serial.println("Set cmd received.");
         // SET [num_changes] [ind_1] [val_1] [ind_2] [val_2] etc
         // Read next 3 bytes of buffer, interpret as SET [index] [value]
-        for(int i=0; i<(packetSize-8); i+=3){
+        for(int i=1; i+2 < packetSize; i+=2){
           // Read next 3 bytes of buffer, interpret as SET [index] [value]
           // Bit shift and logical OR recombine bytes 2&3 into an int
-          setValue( udp_buffer[i], (udp_buffer[i+1]<<8 | udp_buffer[i+2]) );
+          Serial.println( (byte)udp_buffer[i]);
+          Serial.println( (byte)udp_buffer[i+1]);
+          Serial.println( (byte)udp_buffer[i+2]);
+          Serial.println( (byte)udp_buffer[i+3]);
+          Serial.println( udp_buffer[i+1]*256 + udp_buffer[i+2] );
+          Serial.println( (int)( (udp_buffer[i+1]<< 8) + udp_buffer[i+2]) );
+          setValue( udp_buffer[i], int(udp_buffer[i+1] + udp_buffer[i+2]) );
           //Udp.write(index & value);  // Is a reply even necessary?
         }
         break;
@@ -182,18 +164,20 @@ void handleIncomingData(){
         break;
       default:
         // Signals an 'invalid input' error.
-        if(DEBUGGING) Serial.println("Error: Invalid CMD");
+        if(DEBUGGING){
+          Serial.print("Error: Invalid CMD: '");
+          Serial.print(udp_buffer[0]);
+          Serial.println("'");
+        }
         if(ECHO_ON) sendUDP(0, 999);
     }
     // Update timer each time we receive control data
-    lastCom = micros();
+    lastCom = millis();
   }
 }
 
 void broadcast (int gap){
-//  static unsigned long last = -gap;
   static const IPAddress BROADCAST_IP (255,255,255,255);
-//  static const int BROADCAST_PORT (localPort);
 
   if(DEBUGGING){
     Serial.println(F("Broadcast!"));
@@ -211,19 +195,31 @@ void broadcast (int gap){
 }
 
 void setValue (int8_t index, int16_t value){
+  Serial.println("Processing SET.");
   // Takes a (byte)index and (int)value, stores them in control array.
   // Check if value is within acceptable range, otherwise return an error.
   if(index >= 0 && index <= CTRL_SIZE && value <= PROP_MAX && value >= PROP_MIN){
+    if(DEBUGGING){
+      Serial.print("Setting index: ");
+      Serial.print(index);
+      Serial.print(" to value: ");
+      Serial.println(value);
+    }
     // -520 to 520, motors ignore small amounts over abs(500)
     control[index] = value;
-    
     // Should be able to write value once and let I2C store it.
     pwm.setPWM(index, 0, control[value]);
     
     // Send back confirmation of new value.. may disable later.
-    //getValue(index);
+    getValue(index);
   } else {
     // Invalid SET cmd, send back an error.
+    if(DEBUGGING){
+      Serial.print("Invalid SET index: ");
+      Serial.print(index);
+      Serial.print(" or value: ");
+      Serial.println(value);
+    }
     sendUDP(1, index);
   }
 }
@@ -254,7 +250,7 @@ void getRange (int8_t index){
     sendUDP( 0, 3);
   }
 }
-  
+
 void sendUDP (int8_t code, int8_t index, int8_t value){
   // Sends back data in a format consistant with standards.md protocal.
   Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
